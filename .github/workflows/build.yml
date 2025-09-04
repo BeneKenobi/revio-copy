@@ -1,0 +1,91 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  # Allow manual triggers
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '1.18'
+        check-latest: true
+
+    - name: Check out code
+      uses: actions/checkout@v2
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test -v ./...
+
+  build:
+    name: Build
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goarch: arm64
+            goos: windows
+
+    steps:
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '1.18'
+        check-latest: true
+
+    - name: Check out code
+      uses: actions/checkout@v2
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Build
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        # Create build directory
+        mkdir -p build
+        
+        # Set binary extension based on OS
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          BINARY_NAME=revio-copy.exe
+        else
+          BINARY_NAME=revio-copy
+        fi
+        
+        OUTPUT_NAME="revio-copy-${{ matrix.goos }}-${{ matrix.goarch }}"
+        
+        # Build the binary
+        go build -v -o "build/$OUTPUT_NAME${BINARY_NAME#revio-copy}" .
+        
+        # Create archive with README and LICENSE
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          zip -j "$OUTPUT_NAME.zip" "build/$OUTPUT_NAME${BINARY_NAME#revio-copy}" README.md LICENSE
+        else
+          # For tar, we need to handle the directory structure differently
+          cp README.md LICENSE build/
+          tar -czf "$OUTPUT_NAME.tar.gz" -C build "$OUTPUT_NAME${BINARY_NAME#revio-copy}" README.md LICENSE
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: revio-copy-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: |
+          build/revio-copy-${{ matrix.goos }}-${{ matrix.goarch }}*
+          revio-copy-${{ matrix.goos }}-${{ matrix.goarch }}.*
