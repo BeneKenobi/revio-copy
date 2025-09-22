@@ -12,6 +12,7 @@ import (
 	"github.com/schnurbe/revio-copy/pkg/copyfiles"
 	"github.com/schnurbe/revio-copy/pkg/fileops"
 	"github.com/schnurbe/revio-copy/pkg/flags"
+	"github.com/schnurbe/revio-copy/pkg/logging"
 	"github.com/schnurbe/revio-copy/pkg/metadata"
 	"github.com/spf13/cobra"
 )
@@ -23,6 +24,15 @@ var processCmd = &cobra.Command{
 	Long: `Process PacBio Revio sequencing data by extracting metadata information.
 If no run name is specified, you will be prompted to select from available runs.`,
 	Args: cobra.ExactArgs(1),
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// Only ensure rclone exists if we intend to copy (output provided and not dry-run) to keep 'list only' usage lightweight.
+		if flags.GetOutputDir() != "" && !flags.GetDryRunMode() {
+			if err := checkRcloneAvailability(); err != nil {
+				return err
+			}
+		}
+		return nil
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		rootDir := args[0]
 
@@ -41,7 +51,7 @@ If no run name is specified, you will be prompted to select from available runs.
 
 		// Debug: Print all metadata files found
 		for i, file := range metadataFiles {
-			debugf("Metadata file %d: %s", i+1, file)
+			debugf("metadata file %d: %s", i+1, file)
 		}
 
 		// Check if a specific run was requested
@@ -115,23 +125,23 @@ If no run name is specified, you will be prompted to select from available runs.
 			fmt.Printf("\nIdentifying files to copy...\n")
 
 			// Create a map of metadata files to biosamples
-			metadataFileToBiosample := make(map[string]string)
+			metadataFileToBiosample := make(map[string][]metadata.BioSampleInfo)
 			metadataFiles := make([]string, 0, len(selectedRun.Cells))
 
 			// Debug cell count
-			debugf("Found %d cells in the selected run", len(selectedRun.Cells))
+			logging.Debugf("selected run has %d cells", len(selectedRun.Cells))
 
 			for i, cell := range selectedRun.Cells {
-				debugf("Cell %d, FilePath=%s, BioSample=%s", i+1, cell.FilePath, cell.BioSample)
-				metadataFileToBiosample[cell.FilePath] = cell.BioSample
+				logging.Debugf("cell %d path=%s biosamples=%v", i+1, cell.FilePath, cell.BioSamples)
+				metadataFileToBiosample[cell.FilePath] = cell.BioSamples
 				metadataFiles = append(metadataFiles, cell.FilePath)
 			}
 
 			// Debug output dir
-			debugf("Output directory: %s", outputDir)
+			logging.Debugf("output directory: %s", outputDir)
 
 			// Identify files to copy
-			debugf("Calling IdentifyAllHiFiFiles with %d metadata files", len(metadataFiles))
+			logging.Debugf("identifying HiFi files across %d metadata files", len(metadataFiles))
 			fileMappings, err := fileops.IdentifyAllHiFiFiles(metadataFiles, metadataFileToBiosample, outputDir)
 			if err != nil {
 				fmt.Printf("Error identifying files: %v\n", err)
@@ -274,9 +284,4 @@ func promptForSelection(prompt string, max int) int {
 	}
 }
 
-func init() {
-	rootCmd.AddCommand(processCmd)
-
-	// Mark output flag as required for the process command
-	processCmd.MarkFlagRequired("output")
-}
+func init() { rootCmd.AddCommand(processCmd) }

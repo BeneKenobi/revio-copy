@@ -10,13 +10,13 @@ import (
 	"github.com/schnurbe/revio-copy/pkg/fileops"
 )
 
-// FileCopier handles copying files with rclone
+// FileCopier handles copying files with rclone.
 type FileCopier struct {
 	DryRun  bool
 	Verbose bool
 }
 
-// NewFileCopier creates a new FileCopier
+// NewFileCopier creates a new FileCopier.
 func NewFileCopier(dryRun bool, verbose bool) *FileCopier {
 	return &FileCopier{
 		DryRun:  dryRun,
@@ -24,7 +24,7 @@ func NewFileCopier(dryRun bool, verbose bool) *FileCopier {
 	}
 }
 
-// CopyFileMapping copies files based on a FileMapping
+// CopyFileMapping copies BAM + PBI for a mapping, creating destination directories.
 func (fc *FileCopier) CopyFileMapping(mapping *fileops.FileMapping) error {
 	// Create destination directory
 	destDir := filepath.Dir(mapping.DestBAM)
@@ -47,7 +47,7 @@ func (fc *FileCopier) CopyFileMapping(mapping *fileops.FileMapping) error {
 	return nil
 }
 
-// CopyAllFileMappings copies all files in the provided file mappings
+// CopyAllFileMappings copies all provided mappings sequentially.
 func (fc *FileCopier) CopyAllFileMappings(mappings []*fileops.FileMapping) error {
 	totalFiles := len(mappings) * 2 // BAM + PBI
 	completedFiles := 0
@@ -77,7 +77,7 @@ func (fc *FileCopier) CopyAllFileMappings(mappings []*fileops.FileMapping) error
 	return nil
 }
 
-// CopyHiFiReads copies HiFi reads BAM and PBI files to the output directory
+// CopyHiFiReads copies HiFi reads BAM and PBI files to the output directory (legacy helper; prefer Identify + CopyFileMapping pipeline).
 func (fc *FileCopier) CopyHiFiReads(metadataPath, biosample, outputDir string) error {
 	// Determine source directory - metadata file is in the metadata subdir
 	metadataDir := filepath.Dir(metadataPath)
@@ -137,7 +137,7 @@ func (fc *FileCopier) CopyHiFiReads(metadataPath, biosample, outputDir string) e
 	return nil
 }
 
-// copyFileRclone uses rclone to copy a file with checksum verification
+// copyFileRclone uses rclone to copy a file with checksum verification.
 func (fc *FileCopier) copyFileRclone(src, dest string) error {
 	// Check if source file exists
 	srcInfo, err := os.Stat(src)

@@ -1,14 +1,5 @@
 package fileops
 
-import (
-	"fmt"
+import "github.com/schnurbe/revio-copy/pkg/logging"
 
-	"github.com/schnurbe/revio-copy/pkg/flags"
-)
-
-// debugf prints a formatted debug message if debug mode is enabled
-func debugf(format string, args ...interface{}) {
-	if flags.GetDebugMode() {
-		fmt.Printf("Debug [fileops]: "+format+"\n", args...)
-	}
-}
+func debugf(format string, args ...interface{}) { logging.Debugf("fileops: "+format, args...) }

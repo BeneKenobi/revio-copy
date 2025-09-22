@@ -1,39 +1,31 @@
 package flags
 
-// Package flags provides access to the application's command-line flags.
+// Package flags centralizes state derived from command-line flags / environment.
+// Keeping the variables unexported avoids accidental mutation from other packages.
 
-// These variables will be set from the cmd package
 var (
-	OutputDir  string
-	RunName    string
-	DebugMode  bool
-	DryRunMode bool
+	outputDir  string
+	runName    string
+	debugMode  bool
+	dryRunMode bool
 )
 
-// GetDebugMode returns whether debug mode is enabled
-func GetDebugMode() bool {
-	return DebugMode
-}
+// GetDebugMode reports whether debug output is enabled.
+func GetDebugMode() bool { return debugMode }
 
-// GetDryRunMode returns whether dry-run mode is enabled
-func GetDryRunMode() bool {
-	return DryRunMode
-}
+// GetDryRunMode reports whether copy operations should be simulated only.
+func GetDryRunMode() bool { return dryRunMode }
 
-// GetOutputDir returns the configured output directory
-func GetOutputDir() string {
-	return OutputDir
-}
+// GetOutputDir returns the configured output directory (may be empty for list-only mode).
+func GetOutputDir() string { return outputDir }
 
-// GetRunName returns the specified run name
-func GetRunName() string {
-	return RunName
-}
+// GetRunName returns the explicitly requested run name (empty means interactive selection).
+func GetRunName() string { return runName }
 
-// SetFlags sets all the flag values
+// SetFlags updates all internally stored flag values.
 func SetFlags(output string, run string, debug bool, dryRun bool) {
-	OutputDir = output
-	RunName = run
-	DebugMode = debug
-	DryRunMode = dryRun
+	outputDir = output
+	runName = run
+	debugMode = debug
+	dryRunMode = dryRun
 }

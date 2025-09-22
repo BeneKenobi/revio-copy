@@ -10,60 +10,60 @@ import (
 	"strings"
 )
 
-// PacBioDataModel represents the root element of the metadata XML file
+// PacBioDataModel represents the root element of the metadata XML file.
 type PacBioDataModel struct {
 	XMLName             xml.Name            `xml:"PacBioDataModel"`
 	ExperimentContainer ExperimentContainer `xml:"ExperimentContainer"`
 }
 
-// ExperimentContainer represents the ExperimentContainer element
+// ExperimentContainer represents the ExperimentContainer element.
 type ExperimentContainer struct {
 	Runs Runs `xml:"Runs"`
 }
 
-// Runs represents the Runs element
+// Runs represents the Runs element.
 type Runs struct {
 	Run Run `xml:"Run"`
 }
 
-// Run represents the Run element
+// Run represents the Run element.
 type Run struct {
 	Name    string  `xml:"Name,attr"`
 	Outputs Outputs `xml:"Outputs"`
 }
 
-// Outputs represents the Outputs element
+// Outputs represents the Outputs element.
 type Outputs struct {
 	SubreadSets SubreadSets `xml:"SubreadSets"`
 }
 
-// SubreadSets represents the SubreadSets element
+// SubreadSets represents the SubreadSets element.
 type SubreadSets struct {
 	SubreadSet SubreadSet `xml:"SubreadSet"`
 }
 
-// SubreadSet represents the SubreadSet element
+// SubreadSet represents the SubreadSet element.
 type SubreadSet struct {
 	DataSetMetadata DataSetMetadata `xml:"DataSetMetadata"`
 }
 
-// DataSetMetadata represents the DataSetMetadata element
+// DataSetMetadata represents the DataSetMetadata element.
 type DataSetMetadata struct {
 	Collections Collections `xml:"Collections"`
 }
 
-// Collections represents the Collections element
+// Collections represents the Collections element.
 type Collections struct {
 	CollectionMetadata CollectionMetadata `xml:"CollectionMetadata"`
 }
 
-// CollectionMetadata represents the CollectionMetadata element
+// CollectionMetadata represents the CollectionMetadata element.
 type CollectionMetadata struct {
 	RunDetails RunDetails `xml:"RunDetails"`
 	WellSample WellSample `xml:"WellSample"`
 }
 
-// RunDetails represents the RunDetails element
+// RunDetails represents the RunDetails element.
 type RunDetails struct {
 	Name        string `xml:"Name"`
 	CreatedBy   string `xml:"CreatedBy"`
@@ -72,34 +72,41 @@ type RunDetails struct {
 	WhenStarted string `xml:"WhenStarted"`
 }
 
-// WellSample represents the WellSample element
+// WellSample represents the WellSample element.
 type WellSample struct {
-	Name       string     `xml:"Name,attr"`
-	BioSamples BioSamples `xml:"BioSamples"`
+	Name       string      `xml:"Name,attr"`
+	BioSamples []BioSample `xml:"BioSamples>BioSample"`
 }
 
-// BioSamples represents the BioSamples element
-type BioSamples struct {
-	XMLName   xml.Name  `xml:"BioSamples"`
-	Namespace string    `xml:"xmlns,attr"`
-	BioSample BioSample `xml:"BioSample"`
-}
-
-// BioSample represents the BioSample element
+// BioSample represents the BioSample element.
 type BioSample struct {
+	Name        string       `xml:"Name,attr"`
+	DNABarcodes []DNABarcode `xml:"DNABarcodes>DNABarcode"`
+}
+
+// DNABarcode represents the DNABarcode element.
+type DNABarcode struct {
 	Name string `xml:"Name,attr"`
 }
 
-// MetadataInfo holds extracted metadata information
-type MetadataInfo struct {
-	RunName     string
-	BioSample   string
-	FilePath    string
-	CreatedDate string
-	StartedDate string
+// BioSampleInfo holds a biosample and its associated barcode.
+type BioSampleInfo struct {
+	Name    string
+	Barcode string
 }
 
-// ParseMetadataFile parses a metadata XML file and extracts run name and biosample
+// MetadataInfo holds extracted metadata information.
+type MetadataInfo struct {
+	RunName        string
+	BioSamples     []BioSampleInfo // Changed to a slice of BioSampleInfo
+	FilePath       string
+	CreatedDate    string
+	StartedDate    string
+	IsMultiplex    bool
+	WellSampleName string
+}
+
+// ParseMetadataFile parses a metadata XML file and extracts run + biosample information.
 func ParseMetadataFile(filePath string) (*MetadataInfo, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -110,7 +117,7 @@ func ParseMetadataFile(filePath string) (*MetadataInfo, error) {
 	return parseMetadata(file, filePath)
 }
 
-// ParseMetadataFromReader parses metadata from an io.Reader (exported for testing)
+// ParseMetadataFromReader parses metadata from an io.Reader (exported for testing).
 func ParseMetadataFromReader(r io.Reader, filePath string) (*MetadataInfo, error) {
 	return parseMetadata(r, filePath)
 }
@@ -132,63 +139,73 @@ func parseMetadata(r io.Reader, filePath string) (*MetadataInfo, error) {
 		return nil, errors.New("run name not found in metadata")
 	}
 
-	// Extract biosample
-	bioSample := collectionMetadata.WellSample.BioSamples.BioSample.Name
-	if bioSample == "" {
-		return nil, errors.New("biosample name not found in metadata")
+	// Extract biosamples
+	bioSamples := collectionMetadata.WellSample.BioSamples
+	if len(bioSamples) == 0 {
+		return nil, errors.New("no biosamples found in metadata")
 	}
+
+	var bioSampleInfos []BioSampleInfo
+	for _, bs := range bioSamples {
+		if len(bs.DNABarcodes) > 0 {
+			for _, bc := range bs.DNABarcodes {
+				bioSampleInfos = append(bioSampleInfos, BioSampleInfo{Name: bs.Name, Barcode: bc.Name})
+			}
+		} else {
+			bioSampleInfos = append(bioSampleInfos, BioSampleInfo{Name: bs.Name, Barcode: ""})
+		}
+	}
+
+	isMultiplex := len(bioSampleInfos) > 1 && bioSampleInfos[0].Barcode != ""
 
 	// Extract dates
 	createdDate := runDetails.WhenCreated
 	startedDate := runDetails.WhenStarted
 
 	return &MetadataInfo{
-		RunName:     runName,
-		BioSample:   bioSample,
-		FilePath:    filePath,
-		CreatedDate: createdDate,
-		StartedDate: startedDate,
+		RunName:        runName,
+		BioSamples:     bioSampleInfos, // Store as a slice of BioSampleInfo
+		FilePath:       filePath,
+		CreatedDate:    createdDate,
+		StartedDate:    startedDate,
+		IsMultiplex:    isMultiplex,
+		WellSampleName: collectionMetadata.WellSample.Name,
 	}, nil
 }
 
-// FindMetadataFiles finds all metadata XML files in the given directory and its subdirectories
-// Excludes files with "preview" in their name
+// FindMetadataFiles finds all metadata XML files under root (excluding previews).
 func FindMetadataFiles(rootDir string) ([]string, error) {
 	var files []string
-
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil { // Propagate filesystem errors.
 			return err
 		}
-
-		if info.IsDir() && filepath.Base(path) == "metadata" {
-			// This is a metadata directory, look for XML files
-			metadataFiles, err := filepath.Glob(filepath.Join(path, "*.metadata.xml"))
-			if err != nil {
-				return err
-			}
-
-			// Filter out files with "preview" in their name
-			for _, file := range metadataFiles {
-				base := filepath.Base(file)
-				// Skip files with "preview" in their name
-				if !strings.Contains(strings.ToLower(base), "preview") {
-					files = append(files, file)
-				}
-			}
+		if !d.IsDir() {
+			return nil
 		}
-
+		if filepath.Base(path) != "metadata" {
+			return nil
+		}
+		matches, globErr := filepath.Glob(filepath.Join(path, "*.metadata.xml"))
+		if globErr != nil {
+			return globErr
+		}
+		for _, f := range matches {
+			base := filepath.Base(f)
+			if strings.Contains(strings.ToLower(base), "preview") {
+				continue
+			}
+			files = append(files, f)
+		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
-
 	return files, nil
 }
 
-// FindRunsByName finds all metadata files for a specific run name
+// FindRunsByName aggregates all metadata cells for a specific run name.
 func FindRunsByName(metadataFiles []string, runName string) (*RunInfo, error) {
 	runInfo := &RunInfo{
 		Name:           runName,
@@ -204,7 +221,9 @@ func FindRunsByName(metadataFiles []string, runName string) (*RunInfo, error) {
 
 		if info.RunName == runName {
 			runInfo.Cells = append(runInfo.Cells, info)
-			runInfo.BioSampleNames[info.BioSample] = true
+			for _, bs := range info.BioSamples {
+				runInfo.BioSampleNames[bs.Name] = true
+			}
 
 			// Set run dates if not already set
 			if runInfo.CreatedDate == "" && info.CreatedDate != "" {
@@ -223,7 +242,7 @@ func FindRunsByName(metadataFiles []string, runName string) (*RunInfo, error) {
 	return runInfo, nil
 }
 
-// RunInfo contains aggregated information about a run
+// RunInfo contains aggregated information about a run.
 type RunInfo struct {
 	Name           string
 	CreatedDate    string
@@ -232,12 +251,12 @@ type RunInfo struct {
 	BioSampleNames map[string]bool // Used as a set to track unique biosamples
 }
 
-// BioSampleCount returns the number of unique biosamples in the run
+// BioSampleCount returns the number of unique biosamples in the run.
 func (r *RunInfo) BioSampleCount() int {
 	return len(r.BioSampleNames)
 }
 
-// GetAllRuns gets metadata for all available runs
+// GetAllRuns parses and aggregates metadata for all available runs.
 func GetAllRuns(metadataFiles []string) ([]*RunInfo, error) {
 	runsMap := make(map[string]*RunInfo)
 
@@ -262,7 +281,9 @@ func GetAllRuns(metadataFiles []string) ([]*RunInfo, error) {
 
 		// Add cell info and track unique biosamples
 		runInfo.Cells = append(runInfo.Cells, info)
-		runInfo.BioSampleNames[info.BioSample] = true
+		for _, bs := range info.BioSamples {
+			runInfo.BioSampleNames[bs.Name] = true
+		}
 	}
 
 	if len(runsMap) == 0 {

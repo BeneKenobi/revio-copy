@@ -7,25 +7,32 @@ import (
 	"strings"
 
 	"github.com/schnurbe/revio-copy/pkg/flags"
+	"github.com/schnurbe/revio-copy/pkg/logging"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-var outputDir string
-var runName string
-var debugMode bool
-var dryRun bool
+var (
+	outputDir string
+	runName   string
+	debugMode bool
+	dryRun    bool
+)
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "revio-copy",
-	Short: "A tool to process PacBio Revio sequencing data",
-	Long: `revio-copy is a CLI tool designed to process PacBio Revio sequencing data,
-extract metadata information, and copy HiFi reads to an output directory with proper naming.`,
-	// This hook runs before any command executes and ensures flags are updated
+	Short: "Process PacBio Revio sequencing data",
+	Long: `revio-copy lists runs and (optionally) copies HiFi read BAM/PBI files for PacBio Revio sequencing data.
+It works in two phases: 1) discover + display metadata; 2) when an output directory is supplied, identify/copy files.`,
+	// Ensure flags are synchronized and debug logging toggled.
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Update flags package with the current flag values
 		updateFlags()
+		if flags.GetDebugMode() {
+			logging.EnableDebug()
+		} else {
+			logging.DisableDebug()
+		}
 	},
 }
 
@@ -33,29 +40,18 @@ extract metadata information, and copy HiFi reads to an output directory with pr
 func checkRcloneAvailability() error {
 	cmd := exec.Command("rclone", "version")
 	output, err := cmd.CombinedOutput()
-
 	if err != nil {
-		return fmt.Errorf("rclone not found or not executable. Please install rclone and make sure it's in your PATH. Error: %w", err)
+		return fmt.Errorf("rclone not found or not executable: %w", err)
 	}
-
-	// Extract the first line of rclone version for the debug message
 	versionLine := strings.Split(string(output), "\n")[0]
-	debugf("rclone is available. Version: %s", versionLine)
+	logging.Debugf("rclone available: %s", versionLine)
 	return nil
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
+// Execute runs the CLI. Only minimal setup is done here; heavy lifting in subcommands.
 func Execute() {
-	// Check if rclone is available before proceeding
-	if err := checkRcloneAvailability(); err != nil {
-		fmt.Println("Error:", err)
-		os.Exit(1)
-	}
-
-	// Initialize viper
-	viper.AutomaticEnv() // Read environment variables that match
-
-	// Execute the root command
+	viper.AutomaticEnv()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -84,11 +80,9 @@ func init() {
 
 // updateFlags updates the flags package with the current flag values
 func updateFlags() {
-	// Use values from viper, which will include both command-line flags and environment variables
 	outputDir = viper.GetString("output")
 	runName = viper.GetString("run")
 	debugMode = viper.GetBool("debug")
 	dryRun = viper.GetBool("dry-run")
-
 	flags.SetFlags(outputDir, runName, debugMode, dryRun)
 }

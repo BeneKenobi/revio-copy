@@ -1,14 +1,6 @@
 package cmd
 
-import (
-	"fmt"
+import "github.com/schnurbe/revio-copy/pkg/logging"
 
-	"github.com/schnurbe/revio-copy/pkg/flags"
-)
-
-// debugf prints a formatted debug message if debug mode is enabled
-func debugf(format string, args ...interface{}) {
-	if flags.GetDebugMode() {
-		fmt.Printf("Debug: "+format+"\n", args...)
-	}
-}
+// debugf kept for local convenience; delegates to central logging.
+func debugf(format string, args ...interface{}) { logging.Debugf(format, args...) }
