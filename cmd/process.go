@@ -14,6 +14,7 @@ import (
 	"github.com/schnurbe/revio-copy/pkg/flags"
 	"github.com/schnurbe/revio-copy/pkg/logging"
 	"github.com/schnurbe/revio-copy/pkg/metadata"
+	"github.com/schnurbe/revio-copy/pkg/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,6 @@ var processCmd = &cobra.Command{
 If no run name is specified, you will be prompted to select from available runs.`,
 	Args: cobra.ExactArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		// Only ensure rclone exists if we intend to copy (output provided and not dry-run) to keep 'list only' usage lightweight.
 		if flags.GetOutputDir() != "" && !flags.GetDryRunMode() {
 			if err := checkRcloneAvailability(); err != nil {
 				return err
@@ -37,22 +37,22 @@ If no run name is specified, you will be prompted to select from available runs.
 		rootDir := args[0]
 
 		// Find metadata files
-		fmt.Printf("Scanning for metadata files in %s...\n", rootDir)
-		metadataFiles, err := metadata.FindMetadataFiles(rootDir)
+		ui.Italic("Scanning for runs in %s...\n", rootDir)
+		allRuns, err := metadata.GetAllRuns(rootDir)
 		if err != nil {
 			return err
 		}
 
-		if len(metadataFiles) == 0 {
-			return fmt.Errorf("no metadata files found in %s", rootDir)
+		if len(allRuns) == 0 {
+			return fmt.Errorf("no runs found in %s", rootDir)
 		}
 
-		fmt.Printf("Found %d metadata files.\n", len(metadataFiles))
+		fmt.Printf("Found %d runs.\n", len(allRuns))
 
 		// Debug: Print all metadata files found
-		for i, file := range metadataFiles {
-			debugf("metadata file %d: %s", i+1, file)
-		}
+		// for i, file := range metadataFiles {
+		// 	debugf("metadata file %d: %s", i+1, file)
+		// }
 
 		// Check if a specific run was requested
 		var selectedRun *metadata.RunInfo
@@ -60,37 +60,63 @@ If no run name is specified, you will be prompted to select from available runs.
 
 		if runName != "" {
 			// Process specific run
-			fmt.Printf("Looking for run: %s\n", runName)
-			selectedRun, err = metadata.FindRunsByName(metadataFiles, runName)
-			if err != nil {
-				return err
+			ui.Italic("Looking for run: %s\n", runName)
+			// Find the run from the list of all runs
+			for _, run := range allRuns {
+				if run.Name == runName {
+					selectedRun = run
+					break
+				}
+			}
+
+			if selectedRun == nil {
+				return fmt.Errorf("run '%s' not found", runName)
 			}
 
 			fmt.Printf("Found run '%s' with %d biosamples\n",
 				runName, selectedRun.BioSampleCount())
 		} else {
 			// No specific run, list available runs for selection
-			allRuns, err := metadata.GetAllRuns(metadataFiles)
-			if err != nil {
-				return err
-			}
-
-			// Display available runs sorted by date (newest first)
-			fmt.Println("Available runs (sorted by started date, newest first):")
+			ui.Bold("Available runs (sorted by started date, newest first):\n")
 			for i, run := range allRuns {
-				dateStr := "Date unknown"
-				if run.StartedDate != "" {
-					dateStr = fmt.Sprintf("Started: %s", run.StartedDate)
+				var statusLabel string
+				if run.Status == metadata.RunPending {
+					statusLabel = " (pending)"
+					fmt.Printf("%d. %s - ", i+1, run.Name)
+					if run.StartedDate != "" {
+						fmt.Printf("Started: %s ", run.StartedDate)
+					} else {
+						fmt.Printf("Date unknown ")
+					}
+					fmt.Printf("(%d biosamples)", run.BioSampleCount())
+					ui.Yellow("%s\n", statusLabel)
+				} else {
+					dateStr := "Date unknown"
+					if run.StartedDate != "" {
+						dateStr = fmt.Sprintf("Started: %s", run.StartedDate)
+					}
+					ui.Green("%d. %s - %s (%d biosamples)\n",
+						i+1, run.Name, dateStr, run.BioSampleCount())
 				}
-
-				fmt.Printf("%d. %s - %s (%d biosamples)\n",
-					i+1, run.Name, dateStr, run.BioSampleCount())
 			}
 
 			// Prompt for run selection
-			selected := promptForSelection("Select a run by number", len(allRuns))
-			if selected < 0 {
-				return fmt.Errorf("invalid selection")
+			var selected int
+			for {
+				selected = promptForSelection("Select a run by number", len(allRuns))
+				if selected == -1 { // Error
+					return fmt.Errorf("invalid selection")
+				}
+				if selected == -2 { // Quit
+					fmt.Println("Aborted.")
+					return nil
+				}
+
+				if allRuns[selected].Status == metadata.RunPending {
+					ui.Yellow("This run is pending and cannot be selected. Please choose another run.\n")
+				} else {
+					break
+				}
 			}
 
 			selectedRun = allRuns[selected]
@@ -98,7 +124,7 @@ If no run name is specified, you will be prompted to select from available runs.
 		}
 
 		// Print information about the selected run
-		fmt.Printf("\nRun Details:\n")
+		ui.Bold("\nRun Details:\n")
 		fmt.Printf("Run Name: %s\n", selectedRun.Name)
 
 		// Print started date information if available
@@ -109,7 +135,7 @@ If no run name is specified, you will be prompted to select from available runs.
 		fmt.Printf("Number of Unique Biosamples: %d\n\n", selectedRun.BioSampleCount())
 
 		// Print unique biosamples
-		fmt.Printf("\nUnique biosamples in this run:\n")
+		ui.Bold("\nUnique biosamples in this run:\n")
 		biosamples := make([]string, 0, selectedRun.BioSampleCount())
 		for biosample := range selectedRun.BioSampleNames {
 			biosamples = append(biosamples, biosample)
@@ -122,7 +148,7 @@ If no run name is specified, you will be prompted to select from available runs.
 		// Check if an output directory was provided to identify files for copying
 		outputDir := flags.GetOutputDir()
 		if outputDir != "" {
-			fmt.Printf("\nIdentifying files to copy...\n")
+			ui.Italic("\nIdentifying files to copy...\n")
 
 			// Create a map of metadata files to biosamples
 			metadataFileToBiosample := make(map[string][]metadata.BioSampleInfo)
@@ -144,17 +170,17 @@ If no run name is specified, you will be prompted to select from available runs.
 			logging.Debugf("identifying HiFi files across %d metadata files", len(metadataFiles))
 			fileMappings, err := fileops.IdentifyAllHiFiFiles(metadataFiles, metadataFileToBiosample, outputDir)
 			if err != nil {
-				fmt.Printf("Error identifying files: %v\n", err)
+				ui.Red("Error identifying files: %v\n", err)
 			} else {
 				fmt.Printf("\nIdentified %d files to copy:\n", len(fileMappings))
-				fmt.Println("\n=============== FILE IDENTIFICATION REPORT ===============")
+				ui.Bold("\n=============== FILE IDENTIFICATION REPORT ===============\n")
 
 				// Track totals for summary
 				var totalBAMSize, totalPBISize int64
 				var validFileCount, invalidFileCount int
 
 				for i, mapping := range fileMappings {
-					fmt.Printf("\n[%d] Biosample: %s\n", i+1, mapping.BioSample)
+					ui.Bold("\n[%d] Biosample: %s\n", i+1, mapping.BioSample)
 
 					// Check if source BAM exists and get size
 					bamInfo, bamErr := os.Stat(mapping.SourceBAM)
@@ -183,16 +209,16 @@ If no run name is specified, you will be prompted to select from available runs.
 					// Print source file information with existence status and size
 					fmt.Printf("    Source BAM: %s\n", mapping.SourceBAM)
 					if bamExists {
-						fmt.Printf("      - Size: %.2f MB, Status: EXISTS\n", float64(bamSize)/(1024*1024))
+						ui.Green("      - Size: %.2f MB, Status: EXISTS\n", float64(bamSize)/(1024*1024))
 					} else {
-						fmt.Printf("      - Status: MISSING, Error: %v\n", bamErr)
+						ui.Red("      - Status: MISSING, Error: %v\n", bamErr)
 					}
 
 					fmt.Printf("    Source PBI: %s\n", mapping.SourcePBI)
 					if pbiExists {
-						fmt.Printf("      - Size: %.2f MB, Status: EXISTS\n", float64(pbiSize)/(1024*1024))
+						ui.Green("      - Size: %.2f MB, Status: EXISTS\n", float64(pbiSize)/(1024*1024))
 					} else {
-						fmt.Printf("      - Status: MISSING, Error: %v\n", pbiErr)
+						ui.Red("      - Status: MISSING, Error: %v\n", pbiErr)
 					}
 
 					// Print destination file information
@@ -202,21 +228,25 @@ If no run name is specified, you will be prompted to select from available runs.
 					// Check if destination directory exists
 					destDir := filepath.Dir(mapping.DestBAM)
 					if _, err := os.Stat(destDir); os.IsNotExist(err) {
-						fmt.Printf("    Destination directory does not exist: %s\n", destDir)
+						ui.Yellow("    Destination directory does not exist: %s\n", destDir)
 					}
 				}
 
 				// Print summary statistics
-				fmt.Println("\n=============== SUMMARY ===============")
+				ui.Bold("\n=============== SUMMARY ===============\n")
 				fmt.Printf("Total files identified: %d (%d BAM + %d PBI files)\n",
 					len(fileMappings)*2, len(fileMappings), len(fileMappings))
-				fmt.Printf("Valid files found: %d\n", validFileCount)
-				fmt.Printf("Missing files: %d\n", invalidFileCount)
+				ui.Green("Valid files found: %d\n", validFileCount)
+				if invalidFileCount > 0 {
+					ui.Red("Missing files: %d\n", invalidFileCount)
+				} else {
+					fmt.Printf("Missing files: %d\n", invalidFileCount)
+				}
 				fmt.Printf("Total data size: %.2f GB (BAM: %.2f GB, PBI: %.2f GB)\n",
 					float64(totalBAMSize+totalPBISize)/(1024*1024*1024),
 					float64(totalBAMSize)/(1024*1024*1024),
 					float64(totalPBISize)/(1024*1024*1024))
-				fmt.Println("========================================")
+				ui.Bold("========================================\n")
 
 				// If files are identified and there are no missing files, proceed with copying
 				if len(fileMappings) > 0 && invalidFileCount == 0 {
@@ -225,9 +255,9 @@ If no run name is specified, you will be prompted to select from available runs.
 					verboseMode := flags.GetDebugMode()
 
 					if dryRunMode {
-						fmt.Println("\n[DRY RUN] Copy operations will be simulated but not executed")
+						ui.Yellow("\n[DRY RUN] Copy operations will be simulated but not executed\n")
 					} else {
-						fmt.Println("\nProceeding with file copying...")
+						ui.Italic("\nProceeding with file copying...\n")
 					}
 
 					// Create file copier and perform copy
@@ -235,15 +265,15 @@ If no run name is specified, you will be prompted to select from available runs.
 					err := copier.CopyAllFileMappings(fileMappings)
 
 					if err != nil {
-						fmt.Printf("\nError during file copying: %v\n", err)
+						ui.Red("\nError during file copying: %v\n", err)
 					} else if dryRunMode {
-						fmt.Println("\n[DRY RUN] Copy simulation completed successfully.")
+						ui.Yellow("\n[DRY RUN] Copy simulation completed successfully.\n")
 						fmt.Println("Run without --dry-run flag to perform actual copying.")
 					} else {
-						fmt.Println("\nAll files copied successfully!")
+						ui.Green("\nAll files copied successfully!\n")
 					}
 				} else if invalidFileCount > 0 {
-					fmt.Println("\nCannot proceed with copying due to missing source files.")
+					ui.Red("\nCannot proceed with copying due to missing source files.\n")
 					fmt.Println("Please check the file identification report above.")
 				}
 			}
@@ -254,26 +284,32 @@ If no run name is specified, you will be prompted to select from available runs.
 		if flags.GetDryRunMode() {
 			fmt.Printf("\nFile identification and dry-run complete.\n")
 		} else {
-			fmt.Printf("\nFile processing complete.\n")
+			ui.Green("\nFile processing complete.\n")
 		}
 
 		return nil
 	},
 }
 
-// promptForSelection prompts the user to select an option by number
+// promptForSelection prompts the user to select an option by number.
+// It returns the selected index (0-based), -1 for an error, or -2 to quit.
 func promptForSelection(prompt string, max int) int {
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Printf("%s (1-%d): ", prompt, max)
+		fmt.Printf("%s (1-%d, or 'q' to quit): ", prompt, max)
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Println("Error reading input:", err)
 			return -1
 		}
 
-		// Trim whitespace and convert to int
+		// Trim whitespace and check for quit command
 		input = strings.TrimSpace(input)
+		if strings.ToLower(input) == "q" {
+			return -2
+		}
+
+		// Convert to int
 		selected, err := strconv.Atoi(input)
 		if err != nil || selected < 1 || selected > max {
 			fmt.Printf("Please enter a number between 1 and %d\n", max)

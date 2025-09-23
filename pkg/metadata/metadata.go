@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -95,6 +96,16 @@ type BioSampleInfo struct {
 	Barcode string
 }
 
+// RunStatus represents the completion status of a run.
+type RunStatus string
+
+const (
+	// RunComplete indicates that the run has finished processing.
+	RunComplete RunStatus = "complete"
+	// RunPending indicates that the run is still awaiting data.
+	RunPending RunStatus = "pending"
+)
+
 // MetadataInfo holds extracted metadata information.
 type MetadataInfo struct {
 	RunName        string
@@ -104,6 +115,7 @@ type MetadataInfo struct {
 	StartedDate    string
 	IsMultiplex    bool
 	WellSampleName string
+	Status         RunStatus
 }
 
 // ParseMetadataFile parses a metadata XML file and extracts run + biosample information.
@@ -170,6 +182,7 @@ func parseMetadata(r io.Reader, filePath string) (*MetadataInfo, error) {
 		StartedDate:    startedDate,
 		IsMultiplex:    isMultiplex,
 		WellSampleName: collectionMetadata.WellSample.Name,
+		Status:         RunComplete,
 	}, nil
 }
 
@@ -205,41 +218,97 @@ func FindMetadataFiles(rootDir string) ([]string, error) {
 	return files, nil
 }
 
-// FindRunsByName aggregates all metadata cells for a specific run name.
-func FindRunsByName(metadataFiles []string, runName string) (*RunInfo, error) {
-	runInfo := &RunInfo{
-		Name:           runName,
-		Cells:          []*MetadataInfo{},
-		BioSampleNames: make(map[string]bool),
-	}
+// FindPendingRuns finds runs that have started transferring but are not yet complete.
+func FindPendingRuns(rootDir string) (map[string]*RunInfo, error) {
+	pendingRuns := make(map[string]*RunInfo)
 
-	for _, file := range metadataFiles {
-		info, err := ParseMetadataFile(file)
+	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			continue // Skip files that can't be parsed
+			return err
+		}
+		if d.IsDir() || !strings.HasPrefix(d.Name(), "Transfer_Test_") || !strings.HasSuffix(d.Name(), ".txt") {
+			return nil
 		}
 
-		if info.RunName == runName {
-			runInfo.Cells = append(runInfo.Cells, info)
-			for _, bs := range info.BioSamples {
-				runInfo.BioSampleNames[bs.Name] = true
+		// Get the parent directory, which should be "metadata"
+		metadataDir := filepath.Dir(path)
+		if filepath.Base(metadataDir) != "metadata" {
+			return nil
+		}
+
+		// Check if a metadata file already exists in the same directory
+		metadataFiles, err := filepath.Glob(filepath.Join(metadataDir, "*.metadata.xml"))
+		if err != nil {
+			return err
+		}
+		if len(metadataFiles) > 0 {
+			return nil // This cell is already complete
+		}
+
+		// This is a pending cell, so let's get its run name
+		relPath, err := filepath.Rel(rootDir, path)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(relPath, string(os.PathSeparator))
+		if len(parts) < 3 {
+			return nil // Invalid path structure
+		}
+		runName := parts[0]
+
+		// Create a new RunInfo if it's the first time we see this run
+		if _, exists := pendingRuns[runName]; !exists {
+			// Try to infer date from run name (e.g., r84297_20250922_085610)
+			var startedDate string
+			nameParts := strings.Split(runName, "_")
+			if len(nameParts) >= 2 {
+				dateStr := nameParts[1]
+				if len(dateStr) == 8 {
+					// Basic validation for YYYYMMDD
+					year, errYear := strconv.Atoi(dateStr[0:4])
+					month, errMonth := strconv.Atoi(dateStr[4:6])
+					day, errDay := strconv.Atoi(dateStr[6:8])
+					if errYear == nil && errMonth == nil && errDay == nil && year > 2000 && month > 0 && month <= 12 && day > 0 && day <= 31 {
+						startedDate = dateStr
+					}
+				}
 			}
 
-			// Set run dates if not already set
-			if runInfo.CreatedDate == "" && info.CreatedDate != "" {
-				runInfo.CreatedDate = info.CreatedDate
+			pendingRuns[runName] = &RunInfo{
+				Name:        runName,
+				Status:      RunPending,
+				Cells:       []*MetadataInfo{},
+				StartedDate: startedDate,
 			}
-			if runInfo.StartedDate == "" && info.StartedDate != "" {
-				runInfo.StartedDate = info.StartedDate
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return pendingRuns, nil
+}
+
+// FindRunsByName aggregates all metadata cells for a specific run name.
+func FindRunsByName(rootDir string, runName string) (*RunInfo, error) {
+	allRuns, err := GetAllRuns(rootDir)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, run := range allRuns {
+		if run.Name == runName {
+			if run.Status == RunPending {
+				return nil, errors.New("selected run is pending and cannot be processed")
 			}
+			return run, nil
 		}
 	}
 
-	if len(runInfo.Cells) == 0 {
-		return nil, errors.New("no metadata files found for run: " + runName)
-	}
-
-	return runInfo, nil
+	return nil, errors.New("no metadata files found for run: " + runName)
 }
 
 // RunInfo contains aggregated information about a run.
@@ -249,6 +318,7 @@ type RunInfo struct {
 	StartedDate    string
 	Cells          []*MetadataInfo
 	BioSampleNames map[string]bool // Used as a set to track unique biosamples
+	Status         RunStatus
 }
 
 // BioSampleCount returns the number of unique biosamples in the run.
@@ -257,7 +327,13 @@ func (r *RunInfo) BioSampleCount() int {
 }
 
 // GetAllRuns parses and aggregates metadata for all available runs.
-func GetAllRuns(metadataFiles []string) ([]*RunInfo, error) {
+func GetAllRuns(rootDir string) ([]*RunInfo, error) {
+	// Find all completed runs first
+	metadataFiles, err := FindMetadataFiles(rootDir)
+	if err != nil {
+		// We can proceed without completed runs, as there might be pending ones.
+	}
+
 	runsMap := make(map[string]*RunInfo)
 
 	for _, file := range metadataFiles {
@@ -275,6 +351,7 @@ func GetAllRuns(metadataFiles []string) ([]*RunInfo, error) {
 				StartedDate:    info.StartedDate,
 				Cells:          []*MetadataInfo{},
 				BioSampleNames: make(map[string]bool),
+				Status:         RunComplete,
 			}
 			runsMap[info.RunName] = runInfo
 		}
@@ -283,6 +360,18 @@ func GetAllRuns(metadataFiles []string) ([]*RunInfo, error) {
 		runInfo.Cells = append(runInfo.Cells, info)
 		for _, bs := range info.BioSamples {
 			runInfo.BioSampleNames[bs.Name] = true
+		}
+	}
+
+	// Find and merge pending runs
+	pendingRuns, err := FindPendingRuns(rootDir)
+	if err != nil {
+		// Log or handle error, but don't abort if we have complete runs
+	}
+
+	for name, pendingRun := range pendingRuns {
+		if _, exists := runsMap[name]; !exists {
+			runsMap[name] = pendingRun
 		}
 	}
 
